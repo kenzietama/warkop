@@ -24,6 +24,79 @@ class MenuService {
 		$stmt->execute(['name' => $name, 'price' => $price, "qty" => $qty]);
 	}
 
+	public function isInventoryAvailable(string $menuName, int $qty): bool {
+		try {
+			$stmt = $this->pdo->prepare("
+                SELECT ingredients.qty
+                FROM menus
+				INNER JOIN ingredients ON menus.base_ingredient_id = ingredients.id
+				WHERE menus.name = :menu_name1
+
+				UNION ALL
+
+				SELECT ingredients.qty
+				FROM menu_condiments
+				INNER join ingredients ON menu_condiments.condiment_id = ingredients.id
+				INNER JOIN menus ON menu_condiments.menu_id = menus.id
+				WHERE menus.name = :menu_name2;
+            ");
+			$stmt->execute(['menu_name1' => $menuName, 'menu_name2' => $menuName]);
+
+			$ingredients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+			foreach ($ingredients as $ingredient) {
+				if ($ingredient['qty'] < $qty) {
+					return false;
+				}
+			}
+			return true;
+		} catch (Exception $e) {
+			error_log($e->getMessage());
+			return false;
+		}
+	}
+
+	// Reduce inventory after processing an order
+	public function reduceInventory(string $menuName, int $qty): bool {
+		try {
+			$this->pdo->beginTransaction();
+
+			$stmt = $this->pdo->prepare("
+                SELECT ingredients.id
+                FROM menus
+				INNER JOIN ingredients ON menus.base_ingredient_id = ingredients.id
+				WHERE menus.name = :menu_name1
+
+				UNION ALL
+
+				SELECT ingredients.id
+				FROM menu_condiments
+				INNER join ingredients ON menu_condiments.condiment_id = ingredients.id
+				INNER JOIN menus ON menu_condiments.menu_id = menus.id
+				WHERE menus.name = :menu_name2;
+            ");
+			$stmt->execute(['menu_name1' => $menuName, 'menu_name2' => $menuName]);
+
+			$ingredients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+			$updateStmt = $this->pdo->prepare("UPDATE ingredients SET qty = qty - :qty WHERE id = :id");
+
+			foreach ($ingredients as $ingredient) {
+				$updateStmt->execute([
+					':qty' => $qty,
+					':id' => $ingredient['id']
+				]);
+			}
+
+			$this->pdo->commit();
+			return true;
+		} catch (Exception $e) {
+			$this->pdo->rollBack();
+			error_log($e->getMessage());
+			return false;
+		}
+	}
+
 	public function updateStock(array $stocks): bool {
 		try {
 			$this->pdo->beginTransaction();
@@ -45,6 +118,7 @@ class MenuService {
 			return false;
 		}
 	}
+
 
 	// Fetch sales statistics
 	public function getSalesStatistics(): array {
